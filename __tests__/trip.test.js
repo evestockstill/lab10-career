@@ -5,9 +5,20 @@ const app = require('../lib/app');
 const connect = require('../lib/utils/connect');
 const mongoose = require('mongoose');
 const Trip = require('../lib/models/Trip');
-const Itinerary = require('../lib/models/Itinerary');
+const ItineraryItem = require('../lib/models/Itinerary');
 
-describe('trip routes', () => {
+jest.mock('../lib/services/weather.js', () => ({
+  getWOEID() {
+    return Promise.resolve('56789');
+  },
+  getWeather() {
+    return Promise.resolve({
+      min_temp: 75
+    });
+  }
+}));
+
+describe('app routes', () => {
   beforeAll(() => {
     connect();
   });
@@ -17,119 +28,119 @@ describe('trip routes', () => {
   });
 
   let trip;
-  let itineraries;
+  let itineraryItem;
   beforeEach(async() => {
     trip = await Trip.create({
-      name: 'Paris',
-      details: 
-        { time: 2, tripLength: 'weeks' },
-      notes: 
-        'overnight flight'
+      name: 'paris summer 2020'
     });
 
-    itineraries = await Itinerary.create([
-      {
-        tripId: trip._id,
-        dateOfItinerary: new Date(),
-        notes: 'overnight flight'
-      }
-    ]);
+    itineraryItem = await ItineraryItem.create({
+      trip: trip._id,
+      startDate: new Date('2020-07-21'),
+      endDate: new Date('2020-07-22'),
+      woeid: '2487956',
+      name: 'wine tasting'
+    });
   });
+
   afterAll(() => {
     return mongoose.connection.close();
   });
+
   it('creates a trip', () => {
     return request(app)
       .post('/api/v1/trips')
-      .send({
-        name: 'Paris',
-        details: 
-          { time: 2, tripLength: 'weeks' },
-        notes: 
-          'overnight flight'
-      })
+      .send({ name: 'Mexico 2022' })
       .then(res => {
         expect(res.body).toEqual({
           _id: expect.any(String),
-          name: 'Paris',
-          details: 
-            { _id: expect.any(String), time: 2, tripLength: 'weeks' },
-          notes: 
-            'overnight flight',
+          name: 'Mexico 2022',
           __v: 0
         });
       });
   });
 
-  it('gets all trips', async() => {
-    const trips = await Trip.create([
-      { name: 'Paris' },
-      { name: 'France' },
-      { name: 'Mexico' }
-    ]);
+  it('gets a trip by id', () => {
+    return request(app)
+      .get(`/api/v1/trips/${trip.id}`)
+      .then(res => {
+        expect(res.body).toEqual({
+          _id: trip.id,
+          name: 'paris summer 2020',
+          itinerary: [{
+            _id: itineraryItem.id,
+            trip: trip.id,
+            startDate: itineraryItem.startDate.toISOString(),
+            endDate: itineraryItem.endDate.toISOString(),
+            temp: 75,
+            name: 'wine tasting',
+            woeid: '2487956',
+            __v: 0
+          }],
+          __v: 0
+        });
+      });
+  });
 
+  it('gets all trips', () => {
     return request(app)
       .get('/api/v1/trips')
       .then(res => {
-        trips.forEach(trip => {
-          expect(res.body).toContainEqual({
-            _id: trip._id.toString(),
-            name: trip.name
-          });
-        });
+        expect(res.body).toEqual([JSON.parse(JSON.stringify(trip))]);
       });
   });
 
-  it('gets a trip by id', async() => {
+  it('updates a trip', () => {
     return request(app)
-      .get(`/api/v1/trips/${trip._id}`)
+      .patch(`/api/v1/trips/${trip.id}`)
+      .send({ name: 'Minnesota Fall 2021' })
       .then(res => {
-        expect(res.body).toEqual({
-          _id: expect.any(String),
-          name: 'Paris',
-          details: 
-            { _id: expect.any(String), time: 2, tripLength: 'weeks' },
-          notes: 
-            'overnight flight',
-          __v: 0
-        });
+        expect(res.body.name).toEqual('Minnesota Fall 2021');
       });
   });
-  it('updates a trip by id', async() => {
+
+  it('deletes a trip', () => {
     return request(app)
-      .patch(`/api/v1/trips/${trip._id}`)
-      .send({ name: 'Paris' })
+      .delete(`/api/v1/trips/${trip.id}`)
       .then(res => {
         expect(res.body).toEqual({
-          _id: expect.any(String),
-          name: 'Paris',
-          details: 
-            { _id: expect.any(String), time: 2, tripLength: 'weeks' },
-          notes: 
-            'overnight flight',
+          _id: trip.id,
+          name: 'paris summer 2020',
           __v: 0
         });
       });
   });
 
-  it('deletes a trip by id', async() => {
+  it('can add an itinerary item', () => {
     return request(app)
-      .delete(`/api/v1/trips/${trip._id}`)
-      .then(res => {
-        expect(res.body).toEqual({
-          _id: expect.any(String),
-          name: 'Paris',
-          details: 
-            { _id: expect.any(String), time: 2, tripLength: 'weeks' },
-          notes: 
-            'overnight flight',
-          __v: 0
-        });
-
-        return Itinerary.find();
+      .post(`/api/v1/trips/${trip.id}/item`)
+      .send({
+        startDate: new Date('2021-07-26'),
+        endDate: new Date('2021-07-27'),
+        name: 'Go Swimming',
+        latitude: 35.733333,
+        longitude: -100.5555
       })
-      .then(itineraries => {
-        expect(itineraries).toHaveLength(0);
+      .then(res => {
+        expect(res.body.itinerary).toContainEqual({
+          _id: expect.any(String),
+          trip: trip.id,
+          startDate: '2021-07-26T00:00:00.000Z',
+          endDate: '2021-07-27T00:00:00.000Z',
+          name: 'Go Swimming',
+          latitude: 35.733333,
+          longitude: -100.5555,
+          woeid: '56789',
+          __v: 0
+        });
+      });
+  });
+
+  it('can delete an itinerary item', () => {
+    return request(app)
+      .delete(`/api/v1/trips/${trip.id}/item/${itineraryItem.id}`)
+      .then(res => {
+        expect(res.body.itinerary).toHaveLength(0);
       });
   });
 });
